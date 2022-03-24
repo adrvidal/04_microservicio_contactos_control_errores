@@ -1,0 +1,113 @@
+Las excepciones son sitiaciones anomalas que impiden que el servicio pueda realizar su tarea con normalidad.
+Siempre hay que avisar al cliente de la situación.
+
+ESCENARIOS DE UNA PETICIÓN HTTP
+																  (código de estado)			
+	Cuando se hace una petición sin excepcion: RESPUESTA HTTP: cabecera:200 | cuerpo: la respuesta esperada 
+																  ( código de estado!=200)	
+	Cuando se hace una petición CON excepcion: RESPUESTA HTTP: cabecera:codigo de error | cuerpo: la respuesta espeficida de error ( algo para generar una pagina web al usuario final o lo que sea)
+
+Ya exiten códigos de estado predefinidos que representan situaciones típicas.
+
+
+
+EN EL SERVICIO
+	¿cómo se capturan las excepciones? Pues en lugar de hacerlo en cada una de las capas
+		 1. Definimos una clase independiente @RestControllerAdvice (Es lo que en Java se conoce como método transversal, se conoce como programación orientada a aspectos)
+			Que se ejecuta en caso de que se produzca una excepción
+			
+		 2. Escribimos una serie de métodos para capturar las diferentes excepciones que se puedan producir
+				Usando: @ExceptionHandler (Tipo)
+			Todas las excepciones pertenecen a alguna clase java (Tipo)
+			
+			Entonces=> Si se produce un problema de tipo1 => Se ejecutaría el método del tipo1.
+					   Y devuelve un objeto ResponseEntity que contiene la respuesta a enviar al cliente.
+			
+			EN CASO DE QUE SUCEDA UNA EXCEPCIÓN LA RESPUESTA SE ENVÍA DIRECTAMENTE DESDE AQUÍ AL CLIENTE, SIN PASAR POR EL CONTROLLER
+			
+			El objeto ResponseEntity
+				Cuando todo va bien el controlador devuelve el 200 OK con la respuesta
+				Pero si queremos tener un mayor control de la respuesta usamos ResponseEntity.
+				
+				El ResponseEntity tb nos permite gestionar las excepciones.
+					1. Nos permite modificar el código de estado que se va a enviar en la cabecera de la respuesta usando sus constructores.
+					
+EN EL CLIENTE
+Si tenemos un microservicio cliente que se comunica con un servicio externo, este último puede fallar 
+¿cómo hace el cliente para capturar esos errores?
+	Si el cliente recibe un código de estado!=200 => En la llamada con el restTemplate se produce una excepción 
+	
+	Con lo métodos que estábamos utilizando: getForObject o postForObject, sólo tenemos acceso al cuerpo.
+	
+	*Para obtener acceso al ResponseEntity usamos getForEntity o postForEntity()
+	
+	ResponseEntity nos permite acceder al getCode, getbody, y getheaders
+	
+		
+--- Ejemplo
+
+EN EL SERVICIO EXTERNO
+
+	0. @ComponentScan(basePackages = {"controller","service","dao","exceptions"})
+
+	
+	SE PRODUCE LA EXCEPCIÓN
+		1. Definimos una excepxción a propósito, probocandola en el caso de: 
+
+			Si intentamos añadir un nuevo contacto con un email que
+				Si ya existeya existe  => 
+					1. Se va a lanzar un error, que hemos creado nosotros con la clase exception y el mensaje
+						@Override
+						public void agregarContacto(Contacto contacto) throws Exception {
+							// Si no existe: lo agregamos
+							if (agendaDao.recuperarContacto(contacto.getEmail()) == null) {
+								agendaDao.agregarContacto(contacto);
+							} else
+								throw new Exception("Contacto repetido");
+					}
+					
+	CAPTURAMOS LA EXCEPCIÓN
+		2. Definimos exceptions.GestionExcepciones
+
+				@RestControllerAdvice
+				public class GestionExcepciones {
+					
+					@ExceptionHandler(Exception.class)
+					public ResponseEntity<String> manejaError(Exception e) {
+						return new ResponseEntity<>(e.getMessage(), HttpStatus.BAD_REQUEST);
+					}
+
+				}
+		3. Definimos la respuesta ResponseEntity => Tenemos un error 400 y en el body el mensaje: Contacto repetido
+		4. Devolvemos la respuesta 
+
+EN EL CLIENTE.
+
+	1. En el controlador: 
+
+		@GetMapping(value = "/personas/{nombre}/{email}/{edad}", produces = MediaType.APPLICATION_JSON_VALUE)
+		public ResponseEntity<List<Persona>> altaNueva(@PathVariable("nombre") String nombre,
+				@PathVariable("email") String email, @PathVariable("edad") int edad) {
+			Persona persona = new Persona(nombre, email, edad);
+			try {
+				template.postForLocation(urlBase + "/contactos", persona);
+				Persona[] personas = template.getForObject(urlBase + "/contactos", Persona[].class);
+				return new ResponseEntity<List<Persona>>(Arrays.asList(personas), HttpStatus.OK);
+			} catch (HttpStatusCodeException e) {
+				HttpHeaders headers= new HttpHeaders();
+				// aladimos una cabecera de error
+				headers.add("", e.getResponseBodyAsString());
+				return new ResponseEntity<List<Persona>>(Arrays.asList(), headers,e.getStatusCode());	
+			}
+		}
+		
+		
+		Devolvemos la respuesta en un objeto ResponseEntity
+			Si no hay error ResponseEntity:
+				body: LISTA
+				HttpStatus: 200 
+				
+			Si hay un error ( porque recibimos la excepción) ResponseEntity:
+				body: LISTA vacía
+				headers: Error : mensaje de error.
+				HttpStatus: el que venga en el objeto de la excepción 
